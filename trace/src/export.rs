@@ -6,21 +6,19 @@ use lazy_static::lazy_static;
 use crate::basetypes::{Annotation, Attributes, Link, MessageEvent, SpanID, Status};
 use crate::trace::{SpanContext, SpanKind};
 
-/// Exporter is a type for functions that receive sampled trace spans.
+/// Exporter is a trait for structs that receive sampled trace spans.
 ///
-/// The ExportSpan method should be safe for concurrent use and should return
+/// The export_span method should be safe for concurrent use and should return
 /// quickly; if an Exporter takes a significant amount of time to process a
-/// SpanData, that work should be done on another goroutine.
-///
-/// The SpanData should not be modified, but a pointer to it can be kept.
+/// SpanData, that work should be done on another thread or in a future.
 pub trait Exporter {
-    fn export_span(&mut self, s: &SpanData);
+    fn export_span(&self, s: &SpanData);
 }
 
 type Exporters = RwLock<Vec<Arc<dyn Exporter + Send + Sync>>>;
 
 lazy_static! {
-    static ref EXPORTERS: Exporters = { RwLock::new(Vec::new()) };
+    pub static ref EXPORTERS: Exporters = { RwLock::new(Vec::new()) };
 }
 
 /// register_exporter adds to the list of Exporters that will receive sampled

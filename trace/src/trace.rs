@@ -1,15 +1,16 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::iter::IntoIterator;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Once, RwLock};
 use std::time::Instant;
 
 use io_context::Context;
 
 use crate::basetypes::{AttributeValue, Link, SpanID, Status, TraceID};
 use crate::config;
-use crate::export::SpanData;
+use crate::export::{SpanData, EXPORTERS};
 use crate::sampling::{Sampler, SamplingParameters};
+use crate::spanstore::SpanStore;
 use crate::tracestate::Tracestate;
 
 /// Span represents a span of a trace.  It has an associated SpanContext, and
@@ -17,6 +18,9 @@ use crate::tracestate::Tracestate;
 ///
 /// Ideally users should interact with Spans by calling the functions in this
 /// package that take a Context parameter.
+///
+/// Instances of Span can be cloned reasonably easily as all their data
+/// is contained in references.
 #[derive(Debug, Clone)]
 pub struct Span {
     /// data contains information recorded about the span.
@@ -26,11 +30,11 @@ pub struct Span {
     /// SpanContext, so that the trace ID is propagated.
     data: Option<Arc<RwLock<SpanData>>>,
     span_context: SpanContext,
-    //store: Option<Arc<SpanStore<'a>>>,
-    //end_once: Once,
+    span_store: Option<Arc<SpanStore>>,
+    end_once: Arc<Once>,
 }
 
-pub fn start_span(ctx: &Arc<Context>, name: &str, o: &[StartOption]) -> (Context, Arc<Span>) {
+pub fn start_span(ctx: &Arc<Context>, name: &str, o: &[StartOption]) -> (Context, Span) {
     let mut opts = StartOptions::default();
     let parent = from_context(ctx).map(|p| &p.span_context);
     for op in o {
@@ -38,7 +42,7 @@ pub fn start_span(ctx: &Arc<Context>, name: &str, o: &[StartOption]) -> (Context
     }
     let span = start_span_internal(name, parent, false, &opts);
 
-    (new_context(&ctx, Arc::clone(&span)), span)
+    (new_context(&ctx, span.clone()), span)
 }
 
 pub fn start_span_with_remote_parent(
@@ -46,7 +50,7 @@ pub fn start_span_with_remote_parent(
     name: &str,
     parent: &SpanContext,
     o: &[StartOption],
-) -> (Context, Arc<Span>) {
+) -> (Context, Span) {
     let mut opts = StartOptions::default();
     for op in o.into_iter() {
         op(&mut opts);
@@ -54,7 +58,7 @@ pub fn start_span_with_remote_parent(
 
     let span = start_span_internal(name, Some(parent), false, &opts);
 
-    (new_context(&ctx, Arc::clone(&span)), span)
+    (new_context(&ctx, span.clone()), span)
 }
 
 fn start_span_internal(
@@ -62,7 +66,7 @@ fn start_span_internal(
     parent: Option<&SpanContext>,
     remote_parent: bool,
     o: &StartOptions,
-) -> Arc<Span> {
+) -> Span {
     let mut span_context = parent
         .map(SpanContext::clone)
         .unwrap_or_else(SpanContext::default);
@@ -94,11 +98,12 @@ fn start_span_internal(
 
     //TODO(john|p=2|#feature): Enable local span store configuration.
     if !span_context.is_sampled() {
-        return Arc::new(Span {
+        return Span {
             data: None,
             span_context,
-            //end_once: Once::new(),
-        });
+            span_store: None,
+            end_once: Arc::new(Once::new()),
+        };
     }
 
     let data = SpanData {
@@ -116,28 +121,50 @@ fn start_span_internal(
         has_remote_parent: remote_parent,
     };
 
-    Arc::new(Span {
+    Span {
         data: Some(Arc::new(RwLock::new(data))),
         span_context,
-        //end_once: Once::new(),
-    })
+        span_store: None,
+        end_once: Arc::new(Once::new()),
+    }
 }
 
 impl Span {
-    pub fn end(&self) {
+    pub fn end(mut self) {
         if !self.is_recording_events() {
             return;
         }
+        let end_once = Arc::clone(&self.end_once);
+        end_once.call_once(|| {
+            let exporters = EXPORTERS.read().unwrap();
+            let must_export = self.span_context.is_sampled() && !exporters.is_empty();
+            if self.span_store.is_some() || must_export {
+                if let Some(mut span_data) = self.make_span_data() {
+                    span_data.end_time = Some(Instant::now());
+                    // export first so we can borrow SpanData and then
+                    // move it into the store.
+                    if must_export {
+                        for exporter in &*exporters {
+                            exporter.export_span(&span_data);
+                        }
+                    }
+                    let mut span_store_option = self.span_store;
+                    if let Some(span_store) = span_store_option.as_mut() {
+                        span_store.finished(span_data);
+                    }
+                }
+            }
+        });
     }
 
     pub fn is_recording_events(&self) -> bool {
         self.data.is_some()
     }
 
-    fn make_span_data(&self) -> Option<RwLock<SpanData>> {
+    fn make_span_data(&self) -> Option<SpanData> {
         if let Some(data) = &self.data {
             let data = data.read().unwrap();
-            Some(RwLock::new((*data).clone()))
+            Some((*data).clone())
         } else {
             None
         }
@@ -190,11 +217,11 @@ impl fmt::Display for Span {
 
 const SPAN_ID_KEY: &str = "OPENCENSUS_TRACE_SPAN_ID_KEY";
 
-pub fn from_context(ctx: &Context) -> Option<&Arc<Span>> {
+pub fn from_context(ctx: &Context) -> Option<&Span> {
     ctx.get_value(SPAN_ID_KEY)
 }
 
-pub fn new_context(parent: &Arc<Context>, span: Arc<Span>) -> Context {
+pub fn new_context(parent: &Arc<Context>, span: Span) -> Context {
     let mut ctx = Context::create_child(parent);
     ctx.add_value(SPAN_ID_KEY, span);
     ctx
@@ -291,16 +318,6 @@ mod tests {
     const TID: TraceID = TraceID([1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 4, 8, 16, 32, 64, 128]);
     const SID: SpanID = SpanID([1, 2, 4, 8, 16, 32, 64, 128]);
 
-    struct TestExporter {
-        exported: Vec<SpanData>,
-    }
-
-    impl Exporter for TestExporter {
-        fn export_span(&mut self, s: &SpanData) {
-            self.exported.push(s.clone())
-        }
-    }
-
     #[test]
     fn id_string_represenation() {
         assert_eq!(format!("{}", TID), "01020304050607080102040810204080");
@@ -315,12 +332,12 @@ mod tests {
             trace_options: TraceOptions(0),
             trace_state: None,
         };
-        let want = Arc::new(Span {
+        let want = Span {
             data: None,
             span_context: span_context.clone(),
-            //store: None,
-            //end_once: Once::new(),
-        });
+            span_store: None,
+            end_once: Arc::new(Once::new()),
+        };
         let ctx = new_context(&Context::background().freeze(), want);
         let got = from_context(&ctx);
 
@@ -582,9 +599,25 @@ mod tests {
 
     #[test]
     fn span_kind() {
+        use std::sync::Mutex;
+
+        use lazy_static::lazy_static;
+
         use crate::export::{register_exporter, unregister_exporter};
 
-        fn start_span_helper(o: &[StartOption]) -> Arc<Span> {
+        lazy_static! {
+            static ref EXPORTED_SPANS: Mutex<Vec<SpanData>> = Mutex::new(Vec::new());
+        }
+
+        struct TestExporter {}
+
+        impl Exporter for TestExporter {
+            fn export_span(&self, s: &SpanData) {
+                EXPORTED_SPANS.lock().unwrap().push(s.clone())
+            }
+        }
+
+        fn start_span_helper(o: &[StartOption]) -> Span {
             let (_, span) = start_span_with_remote_parent(
                 &Context::background().freeze(),
                 "span0",
@@ -599,13 +632,11 @@ mod tests {
             span
         }
 
-        fn end_span(span: Arc<Span>) {
+        fn end_span(span: Span) {
             assert!(span.is_recording_events());
             assert!(span.span_context.is_sampled());
 
-            let te: Arc<dyn Exporter + Send + Sync> = Arc::new(TestExporter {
-                exported: Vec::new(),
-            });
+            let te: Arc<dyn Exporter + Send + Sync> = Arc::new(TestExporter {});
 
             register_exporter(Arc::clone(&te));
             span.end();

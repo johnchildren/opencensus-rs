@@ -19,18 +19,18 @@ pub const DEFAULT_LATENCIES: [Duration; 8] = [
 
 /// Bucket is a container for a set of spans for a particular error code or latency range.
 #[derive(Debug)]
-pub struct Bucket<'a> {
+pub struct Bucket {
     // next time we can accept a span
     next_time: Instant,
     // circular buffer of spans
-    buffer: Vec<&'a SpanData>,
+    buffer: Vec<SpanData>,
     // location next SpanData should be placed in buffer
     next_index: usize,
     // whether the circular buffer has wrapped around
     overflow: bool,
 }
 
-impl<'a> Bucket<'a> {
+impl Bucket {
     pub fn new(buffer_size: usize) -> Self {
         Bucket {
             next_time: Instant::now(),
@@ -40,7 +40,7 @@ impl<'a> Bucket<'a> {
         }
     }
 
-    pub fn add(&mut self, s: &'a SpanData) {
+    pub fn add(&mut self, s: SpanData) {
         if let Some(end_time) = s.end_time {
             if self.buffer.is_empty() {
                 return;
@@ -63,13 +63,14 @@ impl<'a> Bucket<'a> {
         }
     }
 
-    fn span(&self, idx: usize) -> &'a SpanData {
+    fn span(&self, idx: usize) -> SpanData {
+        // TODO(john|p=2|#performance): not happy with the clones here
         if self.overflow {
-            self.buffer[idx]
+            self.buffer[idx].clone()
         } else if idx < self.buffer.len() - self.next_index {
-            self.buffer[self.next_index + idx]
+            self.buffer[self.next_index + idx].clone()
         } else {
-            self.buffer[self.next_index + idx - self.buffer.len()]
+            self.buffer[self.next_index + idx - self.buffer.len()].clone()
         }
     }
 

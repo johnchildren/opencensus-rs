@@ -13,8 +13,7 @@ const MAX_BUCKET_SIZE: usize = 100_000;
 const DEFAULT_BUCKET_SIZE: usize = 10;
 
 lazy_static! {
-    static ref SPAN_STORES: RwLock<HashMap<String, Arc<SpanStore<'static>>>> =
-        RwLock::new(HashMap::new());
+    static ref SPAN_STORES: RwLock<HashMap<String, Arc<SpanStore>>> = RwLock::new(HashMap::new());
 }
 
 /// SpanStore keeps track of spans stored for a particular span name.
@@ -23,18 +22,18 @@ lazy_static! {
 /// categorized by error code; and a sample of spans for successful requests,
 /// bucketed by latency.
 #[derive(Debug)]
-pub struct SpanStore<'a>(Mutex<SpanStoreContents<'a>>);
+pub struct SpanStore(Mutex<SpanStoreContents>);
 
 // TODO(john|p=2|#techdebt): this doesn't seem idiomatic.
 #[derive(Debug)]
-struct SpanStoreContents<'a> {
+struct SpanStoreContents {
     //active: BTreeSet<Span>,
-    errors: HashMap<StatusCode, Bucket<'a>>,
-    latency: Vec<Bucket<'a>>,
+    errors: HashMap<StatusCode, Bucket>,
+    latency: Vec<Bucket>,
     max_spans_per_error_bucket: usize,
 }
 
-impl<'a> SpanStore<'a> {
+impl<'a> SpanStore {
     pub fn new(name: &str, latency_bucket_size: usize, error_bucket_size: usize) -> Self {
         let latency = (0..=(DEFAULT_LATENCIES.len()))
             .map(|_| Bucket::new(latency_bucket_size))
@@ -64,7 +63,7 @@ impl<'a> SpanStore<'a> {
         // contents.active.insert(Span)
     }
 
-    fn finished(&mut self, span: &Span, sd: &'a SpanData) {
+    pub fn finished(&self, sd: SpanData) {
         let end_time = sd.end_time.unwrap_or_else(time::Instant::now);
         let latency = end_time.duration_since(sd.start_time);
         let code = sd
@@ -74,26 +73,26 @@ impl<'a> SpanStore<'a> {
             .unwrap_or_else(|| StatusCode::Unknown);
 
         let mut contents = self.0.lock().unwrap();
-        // contents.active.remove(span);
+        //contents.active.remove(span);
         if code == StatusCode::OK {
-            contents.latency[latency_bucket(latency)].add(&sd);
+            contents.latency[latency_bucket(latency)].add(sd);
         } else if let Some(bucket) = contents.errors.get_mut(&code) {
-            bucket.add(&sd);
+            bucket.add(sd);
         } else {
             let mut bucket = Bucket::new(contents.max_spans_per_error_bucket);
-            bucket.add(&sd);
+            bucket.add(sd);
             contents.errors.insert(code, bucket);
         }
     }
 }
 
-pub fn span_store_for_name(name: &str) -> Option<Arc<SpanStore<'static>>> {
+pub fn span_store_for_name(name: &str) -> Option<Arc<SpanStore>> {
     let stores = SPAN_STORES.read().unwrap();
     let opt = stores.get(name);
     opt.map(Arc::clone)
 }
 
-pub fn span_store_for_name_create_if_new(name: &str) -> Arc<SpanStore<'static>> {
+pub fn span_store_for_name_create_if_new(name: &str) -> Arc<SpanStore> {
     match span_store_for_name(name) {
         Some(store) => store,
         None => {
@@ -108,6 +107,7 @@ pub fn span_store_for_name_create_if_new(name: &str) -> Arc<SpanStore<'static>> 
         }
     }
 }
+
 /*
 pub fn span_store_set_size(name: &str, latency_bucket_size: usize, error_bucket_size: usize) {
     let mut stores = SPAN_STORES.write().unwrap();
