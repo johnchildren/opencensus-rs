@@ -3,7 +3,3 @@
 members = [
   "trace",
 ]
-
-[badges]
-
-travis-ci = { repository = "johnchildren/opencensus-rs", branch = "master" }

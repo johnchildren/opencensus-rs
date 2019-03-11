@@ -4,6 +4,9 @@ version = "0.1.0"
 authors = ["John Children <john.a.children@gmail.com>"]
 edition = "2018"
 
+[badges]
+travis-ci = { repository = "johnchildren/opencensus-rs", branch = "master" }
+
 [dependencies]
 regex = "1.0.0"
 lazy_static = "1.2.0"
