@@ -35,8 +35,11 @@ impl fmt::Display for SpanID {
 /// Annotation represents a text annotation with a set of attributes and a timestamp.
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct Annotation {
+    /// time is the time when the annotation was added.
     pub time: time::Instant,
+    /// message is the message of the annotation.
     pub message: String,
+    /// attributes is a mapping of attributes for the annotation.
     pub attributes: Attributes,
 }
 
@@ -47,8 +50,11 @@ pub type Attributes = HashMap<String, AttributeValue>;
 /// AttributeValues are the values of attributes on a span, link or annotation.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub enum AttributeValue {
+    /// BoolAttribute is an attribute of type bool.
     BoolAttribute(bool),
+    /// Int64Attribute is an attribute of type i64.
     Int64Attribute(i64),
+    /// StringAttribute is an attribute of type String.
     StringAttribute(String),
 }
 

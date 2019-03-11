@@ -34,6 +34,7 @@ pub struct Span {
     end_once: Arc<Once>,
 }
 
+/// start_span starts a span in a context with a name and options.
 pub fn start_span(ctx: &Arc<Context>, name: &str, o: &[StartOption]) -> (Context, Span) {
     let mut opts = StartOptions::default();
     let parent = from_context(ctx).map(|p| &p.span_context);
@@ -45,6 +46,7 @@ pub fn start_span(ctx: &Arc<Context>, name: &str, o: &[StartOption]) -> (Context
     (new_context(&ctx, span.clone()), span)
 }
 
+/// start_span starts a span in a context with a name and options with a parent span.
 pub fn start_span_with_remote_parent(
     ctx: &Arc<Context>,
     name: &str,
@@ -52,7 +54,7 @@ pub fn start_span_with_remote_parent(
     o: &[StartOption],
 ) -> (Context, Span) {
     let mut opts = StartOptions::default();
-    for op in o.into_iter() {
+    for op in o.iter() {
         op(&mut opts);
     }
 
@@ -130,7 +132,8 @@ fn start_span_internal(
 }
 
 impl Span {
-    pub fn end(mut self) {
+    /// end closes the span and exports it if it should be exported.
+    pub fn end(self) {
         if !self.is_recording_events() {
             return;
         }
@@ -157,6 +160,7 @@ impl Span {
         });
     }
 
+    /// is_recording_events indicates whether a span is recording events.
     pub fn is_recording_events(&self) -> bool {
         self.data.is_some()
     }
@@ -170,10 +174,12 @@ impl Span {
         }
     }
 
+    /// span_context gets a reference to the span context of the span.
     pub fn span_context(&self) -> &SpanContext {
         &self.span_context
     }
 
+    /// set_name sets the name of the span.
     pub fn set_name(&mut self, name: &str) {
         if let Some(data) = &self.data {
             let mut data = data.write().unwrap();
@@ -181,6 +187,7 @@ impl Span {
         }
     }
 
+    /// set_name sets the status of the span.
     pub fn set_status(&mut self, status: &Status) {
         if let Some(data) = &self.data {
             let mut data = data.write().unwrap();
@@ -188,13 +195,21 @@ impl Span {
         }
     }
 
-    pub fn add_attributes(&mut self, attrs: impl IntoIterator<Item = (String, AttributeValue)>) {
+    /// add_attributes adds an iterable of attributes to the span.
+    pub fn add_attributes<'a>(
+        &mut self,
+        attrs: impl IntoIterator<Item = (&'a str, AttributeValue)>,
+    ) {
         if let Some(data) = &self.data {
             let mut data = data.write().unwrap();
-            (*data).attributes = attrs.into_iter().collect();
+            (*data).attributes = attrs
+                .into_iter()
+                .map(|(s, a)| (String::from(s), a.clone()))
+                .collect();
         }
     }
 
+    /// add_link adds a link to a span.
     pub fn add_link(&mut self, l: Link) {
         if let Some(data) = &self.data {
             let mut data = data.write().unwrap();
@@ -230,9 +245,13 @@ pub fn new_context(parent: &Arc<Context>, span: Span) -> Context {
 /// SpanContext contains the state that must propagate across process boundaries.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
 pub struct SpanContext {
+    /// trace_id is the id of the trace the span belongs to.
     pub trace_id: TraceID,
+    /// span_id is the id of the span.
     pub span_id: SpanID,
+    /// trace_options represents options for the span.
     pub trace_options: TraceOptions,
+    /// trace_state is the internal state of the span.
     pub trace_state: Option<Tracestate>,
 }
 
@@ -280,6 +299,7 @@ impl Default for SpanKind {
 
 /// StartOptions contains options concerning how a span is started.
 #[derive(Clone, Default)]
+// TODO(john|p=2|#techdebt): turn this into an options builder
 pub struct StartOptions {
     /// Sampler to consult for this Span. If provided, it is always consulted.
     ///
@@ -632,7 +652,7 @@ mod tests {
             span
         }
 
-        fn end_span(span: Span) {
+        fn end_span(span: Span, test: &TestCase) {
             assert!(span.is_recording_events());
             assert!(span.span_context.is_sampled());
 
@@ -641,6 +661,24 @@ mod tests {
             register_exporter(Arc::clone(&te));
             span.end();
             unregister_exporter(&te);
+
+            let mut exported = EXPORTED_SPANS.lock().unwrap();
+            assert_eq!(
+                exported.len(),
+                1,
+                "unexpected number of spans for {}",
+                test.name
+            );
+            let got = &mut exported[0];
+
+            assert!(
+                got.span_context.span_id != SpanID::default(),
+                "wrong span id for {}",
+                test.name
+            );
+            got.span_context.span_id = SpanID::default();
+
+            assert!(&got.end_time.is_some(), "no end time set for {}", test.name);
         }
 
         struct TestCase {
@@ -725,8 +763,9 @@ mod tests {
         ];
 
         for test in test_cases {
-            let mut span = start_span_helper(&test.start_options);
-            let got = end_span(span);
+            let span = start_span_helper(&test.start_options);
+            end_span(span, &test);
+            EXPORTED_SPANS.lock().unwrap().clear();
         }
     }
 }

@@ -11,9 +11,12 @@ pub trait IDGenerator {
     fn new_span_id(&self) -> SpanID;
 }
 
-lazy_static! {
-    pub static ref DEFAULT_ID_GENERATOR: Arc<dyn IDGenerator + Send + Sync> =
-        Arc::new(DefaultIDGenerator::new());
+pub fn default_id_generator() -> Arc<dyn IDGenerator + Send + Sync> {
+    lazy_static! {
+        pub static ref DEFAULT_ID_GENERATOR: Arc<dyn IDGenerator + Send + Sync> =
+            Arc::new(DefaultIDGenerator::new());
+    }
+    Arc::clone(&DEFAULT_ID_GENERATOR)
 }
 
 pub struct DefaultIDGenerator {

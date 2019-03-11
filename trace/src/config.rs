@@ -2,8 +2,8 @@ use std::sync::{Arc, RwLock};
 
 use lazy_static::lazy_static;
 
-use crate::id_generator::{IDGenerator, DEFAULT_ID_GENERATOR};
-use crate::sampling::{Sampler, DEFAULT_SAMPLER};
+use crate::id_generator::{default_id_generator, IDGenerator};
+use crate::sampling::{default_sampler, Sampler};
 
 /// Config represents the global tracing configuration.
 #[derive(Clone)]
@@ -18,16 +18,18 @@ pub struct Config {
 lazy_static! {
     /// Global tracing configuration.
     static ref CONFIG: RwLock<Config> = RwLock::new(Config {
-        default_sampler: DEFAULT_SAMPLER.clone(),
-        id_generator: DEFAULT_ID_GENERATOR.clone(),
+        default_sampler: default_sampler(),
+        id_generator: default_id_generator(),
     });
 }
 
+/// set_global_default_sampler will change the global default sampler.
 pub fn set_global_default_sampler(sampler: &Sampler) {
     let mut c = CONFIG.write().unwrap();
     c.default_sampler = sampler.clone();
 }
 
+/// set_global_id_generator will change the global id generator.
 pub fn set_global_id_generator(id_generator: &Arc<dyn IDGenerator + Send + Sync>) {
     let mut c = CONFIG.write().unwrap();
     c.id_generator = Arc::clone(id_generator);

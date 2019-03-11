@@ -43,7 +43,7 @@ pub fn unregister_exporter(e: &Arc<dyn Exporter + Send + Sync>) {
     //TODO(john|p=3|#techdebt): there must be a better way to do this?
     *exporters = (*exporters)
         .iter()
-        .filter(|exporter| Arc::ptr_eq(exporter, e))
+        .filter(|exporter| !Arc::ptr_eq(exporter, e))
         .cloned()
         .collect();
 }

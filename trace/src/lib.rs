@@ -66,9 +66,11 @@ mod status_codes;
 mod trace;
 mod tracestate;
 
-pub use crate::basetypes::{SpanID, TraceID};
+pub use crate::basetypes::{Annotation, AttributeValue, Attributes, SpanID, TraceID};
 pub use crate::config::{set_global_default_sampler, set_global_id_generator, Config};
 pub use crate::export::{register_exporter, unregister_exporter};
+pub use crate::sampling::{always_sample, never_sample};
 pub use crate::trace::{
-    start_span, start_span_with_remote_parent, Span, SpanContext, TraceOptions,
+    start_span, start_span_with_remote_parent, with_sampler, with_span_kind, Span, SpanContext,
+    TraceOptions,
 };
