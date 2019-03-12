@@ -10,26 +10,26 @@ fn benchmark_start_span_always_sample(c: &mut Criterion) {
     let attr_sets = vec![
         vec![],
         vec![
-            ("key1", AttributeValue::BoolAttribute(false)),
+            (String::from("key1"), AttributeValue::BoolAttribute(false)),
             (
-                "key2",
+                String::from("key2"),
                 AttributeValue::StringAttribute(String::from("hello")),
             ),
-            ("key2", AttributeValue::Int64Attribute(123)),
+            (String::from("key2"), AttributeValue::Int64Attribute(123)),
         ],
         vec![
-            ("key1", AttributeValue::BoolAttribute(false)),
-            ("key2", AttributeValue::BoolAttribute(true)),
+            (String::from("key1"), AttributeValue::BoolAttribute(false)),
+            (String::from("key2"), AttributeValue::BoolAttribute(true)),
             (
-                "key3",
+                String::from("key3"),
                 AttributeValue::StringAttribute(String::from("hello")),
             ),
             (
-                "key4",
+                String::from("key4"),
                 AttributeValue::StringAttribute(String::from("hello")),
             ),
-            ("key5", AttributeValue::Int64Attribute(123)),
-            ("key6", AttributeValue::Int64Attribute(456)),
+            (String::from("key5"), AttributeValue::Int64Attribute(123)),
+            (String::from("key6"), AttributeValue::Int64Attribute(456)),
         ],
     ];
 
@@ -52,26 +52,26 @@ fn benchmark_start_span_never_sample(c: &mut Criterion) {
     let attr_sets = vec![
         vec![],
         vec![
-            ("key1", AttributeValue::BoolAttribute(false)),
+            (String::from("key1"), AttributeValue::BoolAttribute(false)),
             (
-                "key2",
+                String::from("key2"),
                 AttributeValue::StringAttribute(String::from("hello")),
             ),
-            ("key2", AttributeValue::Int64Attribute(123)),
+            (String::from("key2"), AttributeValue::Int64Attribute(123)),
         ],
         vec![
-            ("key1", AttributeValue::BoolAttribute(false)),
-            ("key2", AttributeValue::BoolAttribute(true)),
+            (String::from("key1"), AttributeValue::BoolAttribute(false)),
+            (String::from("key2"), AttributeValue::BoolAttribute(true)),
             (
-                "key3",
+                String::from("key3"),
                 AttributeValue::StringAttribute(String::from("hello")),
             ),
             (
-                "key4",
+                String::from("key4"),
                 AttributeValue::StringAttribute(String::from("hello")),
             ),
-            ("key5", AttributeValue::Int64Attribute(123)),
-            ("key6", AttributeValue::Int64Attribute(456)),
+            (String::from("key5"), AttributeValue::Int64Attribute(123)),
+            (String::from("key6"), AttributeValue::Int64Attribute(456)),
         ],
     ];
 

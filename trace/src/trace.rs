@@ -58,7 +58,7 @@ pub fn start_span_with_remote_parent(
         op(&mut opts);
     }
 
-    let span = start_span_internal(name, Some(parent), false, &opts);
+    let span = start_span_internal(name, Some(parent), true, &opts);
 
     (new_context(&ctx, span.clone()), span)
 }
@@ -196,16 +196,10 @@ impl Span {
     }
 
     /// add_attributes adds an iterable of attributes to the span.
-    pub fn add_attributes<'a>(
-        &mut self,
-        attrs: impl IntoIterator<Item = (&'a str, AttributeValue)>,
-    ) {
+    pub fn add_attributes(&mut self, attrs: impl IntoIterator<Item = (String, AttributeValue)>) {
         if let Some(data) = &self.data {
             let mut data = data.write().unwrap();
-            (*data).attributes = attrs
-                .into_iter()
-                .map(|(s, a)| (String::from(s), a.clone()))
-                .collect();
+            (*data).attributes = attrs.into_iter().collect();
         }
     }
 
@@ -617,8 +611,9 @@ mod tests {
         check_child(parent, from_context(&ctx2).unwrap());
     }
 
-    #[test]
-    fn span_kind() {
+    mod span_data {
+        use super::*;
+
         use std::sync::Mutex;
 
         use lazy_static::lazy_static;
@@ -627,6 +622,7 @@ mod tests {
 
         lazy_static! {
             static ref EXPORTED_SPANS: Mutex<Vec<SpanData>> = Mutex::new(Vec::new());
+            static ref THEN: Instant = Instant::now();
         }
 
         struct TestExporter {}
@@ -637,135 +633,186 @@ mod tests {
             }
         }
 
-        fn start_span_helper(o: &[StartOption]) -> Span {
-            let (_, span) = start_span_with_remote_parent(
-                &Context::background().freeze(),
-                "span0",
-                &SpanContext {
+        type StartSpanHelper = Box<dyn Fn(&[StartOption]) -> Span>;
+        type EndSpanHelper = Box<dyn Fn(Span) -> SpanData>;
+
+        fn make_helpers() -> (Instant, StartSpanHelper, EndSpanHelper) {
+            EXPORTED_SPANS.lock().unwrap().clear();
+            let then = Instant::now();
+
+            let start_span_helper = |o: &[StartOption]| {
+                let (_, span) = start_span_with_remote_parent(
+                    &Context::background().freeze(),
+                    "span0",
+                    &SpanContext {
+                        trace_id: TID,
+                        span_id: SID,
+                        trace_options: TraceOptions(1),
+                        trace_state: None,
+                    },
+                    o,
+                );
+                span
+            };
+
+            let end_span_helper = move |span: Span| {
+                assert!(span.is_recording_events());
+                assert!(span.span_context.is_sampled());
+
+                let te: Arc<dyn Exporter + Send + Sync> = Arc::new(TestExporter {});
+
+                register_exporter(Arc::clone(&te));
+                span.end();
+                unregister_exporter(&te);
+
+                let mut exported = EXPORTED_SPANS.lock().unwrap();
+                assert_eq!(exported.len(), 1,);
+                let got = &mut exported[0];
+
+                assert!(got.span_context.span_id != SpanID::default(),);
+                got.span_context.span_id = SpanID::default();
+
+                // reset start time so we can check SpanData equality
+                got.start_time = then;
+
+                assert!(&got.end_time.is_some());
+                // reset end time so we can check SpanData equality
+                got.end_time = None;
+
+                got.clone()
+            };
+
+            (then, Box::new(start_span_helper), Box::new(end_span_helper))
+        }
+
+        #[test]
+        fn span_kind() {
+            let (then, start_span_helper, end_span_helper) = make_helpers();
+            struct TestCase {
+                name: &'static str,
+                start_options: Vec<StartOption>,
+                want: SpanData,
+            }
+
+            let test_cases = &[
+                TestCase {
+                    name: "default StartOptions",
+                    start_options: vec![with_span_kind(SpanKind::Unspecified)],
+                    want: SpanData {
+                        span_context: SpanContext {
+                            trace_id: TID,
+                            span_id: SpanID([0; 8]),
+                            trace_options: TraceOptions(1),
+                            trace_state: None,
+                        },
+                        parent_span_id: Some(SID),
+                        name: "span0".to_string(),
+                        span_kind: SpanKind::Unspecified,
+                        has_remote_parent: true,
+
+                        start_time: then,
+                        end_time: None,
+                        attributes: HashMap::new(),
+                        annotations: Vec::new(),
+                        message_events: Vec::new(),
+                        status: None,
+                        links: Vec::new(),
+                    },
+                },
+                TestCase {
+                    name: "client span",
+                    start_options: vec![with_span_kind(SpanKind::Client)],
+                    want: SpanData {
+                        span_context: SpanContext {
+                            trace_id: TID,
+                            span_id: SpanID([0; 8]),
+                            trace_options: TraceOptions(1),
+                            trace_state: None,
+                        },
+                        parent_span_id: Some(SID),
+                        name: "span0".to_string(),
+                        span_kind: SpanKind::Client,
+                        has_remote_parent: true,
+
+                        start_time: then,
+                        end_time: None,
+                        attributes: HashMap::new(),
+                        annotations: Vec::new(),
+                        message_events: Vec::new(),
+                        status: None,
+                        links: Vec::new(),
+                    },
+                },
+                TestCase {
+                    name: "server span",
+                    start_options: vec![with_span_kind(SpanKind::Server)],
+                    want: SpanData {
+                        span_context: SpanContext {
+                            trace_id: TID,
+                            span_id: SpanID([0; 8]),
+                            trace_options: TraceOptions(1),
+                            trace_state: None,
+                        },
+                        parent_span_id: Some(SID),
+                        name: "span0".to_string(),
+                        span_kind: SpanKind::Server,
+                        has_remote_parent: true,
+
+                        start_time: then,
+                        end_time: None,
+                        attributes: HashMap::new(),
+                        annotations: Vec::new(),
+                        message_events: Vec::new(),
+                        status: None,
+                        links: Vec::new(),
+                    },
+                },
+            ];
+
+            for test in test_cases {
+                let span = start_span_helper(&test.start_options);
+                let got = end_span_helper(span);
+                assert_eq!(got, test.want);
+                EXPORTED_SPANS.lock().unwrap().clear();
+            }
+        }
+
+        #[test]
+        fn set_span_attributes() {
+            let (then, start_span_helper, end_span_helper) = make_helpers();
+
+            let mut attributes = HashMap::new();
+            attributes.insert(
+                String::from("key1"),
+                AttributeValue::StringAttribute(String::from("value1")),
+            );
+
+            let mut span = start_span_helper(&[]);
+            span.add_attributes(attributes.clone());
+            let got = end_span_helper(span);
+            let want = SpanData {
+                span_context: SpanContext {
                     trace_id: TID,
-                    span_id: SID,
+                    span_id: SpanID([0; 8]),
                     trace_options: TraceOptions(1),
                     trace_state: None,
                 },
-                o,
-            );
-            span
+                parent_span_id: Some(SID),
+                name: "span0".to_string(),
+                span_kind: SpanKind::Unspecified,
+                has_remote_parent: true,
+                attributes,
+
+                start_time: then,
+                end_time: None,
+                annotations: Vec::new(),
+                message_events: Vec::new(),
+                status: None,
+                links: Vec::new(),
+            };
+            assert_eq!(got, want);
         }
 
-        fn end_span(span: Span, test: &TestCase) {
-            assert!(span.is_recording_events());
-            assert!(span.span_context.is_sampled());
-
-            let te: Arc<dyn Exporter + Send + Sync> = Arc::new(TestExporter {});
-
-            register_exporter(Arc::clone(&te));
-            span.end();
-            unregister_exporter(&te);
-
-            let mut exported = EXPORTED_SPANS.lock().unwrap();
-            assert_eq!(
-                exported.len(),
-                1,
-                "unexpected number of spans for {}",
-                test.name
-            );
-            let got = &mut exported[0];
-
-            assert!(
-                got.span_context.span_id != SpanID::default(),
-                "wrong span id for {}",
-                test.name
-            );
-            got.span_context.span_id = SpanID::default();
-
-            assert!(&got.end_time.is_some(), "no end time set for {}", test.name);
-        }
-
-        struct TestCase {
-            name: &'static str,
-            start_options: Vec<StartOption>,
-            want: SpanData,
-        }
-
-        let test_cases = &[
-            TestCase {
-                name: "default StartOptions",
-                start_options: vec![with_span_kind(SpanKind::Unspecified)],
-                want: SpanData {
-                    span_context: SpanContext {
-                        trace_id: TID,
-                        span_id: SpanID([0; 8]),
-                        trace_options: TraceOptions(1),
-                        trace_state: None,
-                    },
-                    parent_span_id: Some(SID),
-                    name: "span0".to_string(),
-                    span_kind: SpanKind::Unspecified,
-                    has_remote_parent: true,
-
-                    start_time: Instant::now(),
-                    end_time: None,
-                    attributes: HashMap::new(),
-                    annotations: Vec::new(),
-                    message_events: Vec::new(),
-                    status: None,
-                    links: Vec::new(),
-                },
-            },
-            TestCase {
-                name: "client span",
-                start_options: vec![with_span_kind(SpanKind::Client)],
-                want: SpanData {
-                    span_context: SpanContext {
-                        trace_id: TID,
-                        span_id: SpanID([0; 8]),
-                        trace_options: TraceOptions(1),
-                        trace_state: None,
-                    },
-                    parent_span_id: Some(SID),
-                    name: "span0".to_string(),
-                    span_kind: SpanKind::Client,
-                    has_remote_parent: true,
-
-                    start_time: Instant::now(),
-                    end_time: None,
-                    attributes: HashMap::new(),
-                    annotations: Vec::new(),
-                    message_events: Vec::new(),
-                    status: None,
-                    links: Vec::new(),
-                },
-            },
-            TestCase {
-                name: "server span",
-                start_options: vec![with_span_kind(SpanKind::Server)],
-                want: SpanData {
-                    span_context: SpanContext {
-                        trace_id: TID,
-                        span_id: SpanID([0; 8]),
-                        trace_options: TraceOptions(1),
-                        trace_state: None,
-                    },
-                    parent_span_id: Some(SID),
-                    name: "span0".to_string(),
-                    span_kind: SpanKind::Server,
-                    has_remote_parent: true,
-
-                    start_time: Instant::now(),
-                    end_time: None,
-                    attributes: HashMap::new(),
-                    annotations: Vec::new(),
-                    message_events: Vec::new(),
-                    status: None,
-                    links: Vec::new(),
-                },
-            },
-        ];
-
-        for test in test_cases {
-            let span = start_span_helper(&test.start_options);
-            end_span(span, &test);
-            EXPORTED_SPANS.lock().unwrap().clear();
-        }
+        //TODO: max attributes per span
     }
 }
