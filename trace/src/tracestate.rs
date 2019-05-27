@@ -18,11 +18,31 @@ const VALUE_FORMAT: &str = r"^[\x20-\x2b\x2d-\x3c\x3e-\x7e]{0,255}[\x21-\x2b\x2d
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
 pub struct Key(String);
 
-// TODO(john|p=1|#errors): implement error handling traits
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub enum KeyValidationError {
-    ExceedsMaxSize,
-    DoesNotMatchRegex,
+    ExceedsMaxSize(String),
+    DoesNotMatchRegex(String),
+}
+
+impl std::fmt::Display for KeyValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self {
+            KeyValidationError::ExceedsMaxSize(k) => write!(
+                f,
+                "key '{}' exceeds the maximum key size of {}",
+                k, KEY_MAX_SIZE
+            ),
+            KeyValidationError::DoesNotMatchRegex(k) => {
+                write!(f, "key '{}' does not have a valid format", k)
+            }
+        }
+    }
+}
+
+impl std::error::Error for KeyValidationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        None
+    }
 }
 
 impl Key {
@@ -32,9 +52,9 @@ impl Key {
                 RegexSet::new(&[KEY_WITHOUT_VENDOR_FORMAT, KEY_WITH_VENDOR_FORMAT]).unwrap();
         }
         if key.len() > KEY_MAX_SIZE {
-            Err(KeyValidationError::ExceedsMaxSize)
+            Err(KeyValidationError::ExceedsMaxSize(key.to_string()))
         } else if !KEY_VALIDATION_RE.is_match(&key) {
-            Err(KeyValidationError::DoesNotMatchRegex)
+            Err(KeyValidationError::DoesNotMatchRegex(key.to_string()))
         } else {
             Ok(Key(key.to_string()))
         }
@@ -46,11 +66,31 @@ impl Key {
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
 pub struct Value(String);
 
-// TODO(john|p=1|#errors): implement error handling traits
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub enum ValueValidationError {
-    ExceedsMaxSize,
-    DoesNotMatchRegex,
+    ExceedsMaxSize(String),
+    DoesNotMatchRegex(String),
+}
+
+impl std::fmt::Display for ValueValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self {
+            ValueValidationError::ExceedsMaxSize(k) => write!(
+                f,
+                "value '{}' exceeds the maximum key size of {}",
+                k, KEY_MAX_SIZE
+            ),
+            ValueValidationError::DoesNotMatchRegex(k) => {
+                write!(f, "value '{}' does not have a valid format", k)
+            }
+        }
+    }
+}
+
+impl std::error::Error for ValueValidationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        None
+    }
 }
 
 impl Value {
@@ -59,9 +99,9 @@ impl Value {
             static ref VALUE_VALIDATION_RE: Regex = Regex::new(VALUE_FORMAT).unwrap();
         }
         if value.len() > VALUE_MAX_SIZE {
-            Err(ValueValidationError::ExceedsMaxSize)
+            Err(ValueValidationError::ExceedsMaxSize(value.to_string()))
         } else if !VALUE_VALIDATION_RE.is_match(&value) {
-            Err(ValueValidationError::DoesNotMatchRegex)
+            Err(ValueValidationError::DoesNotMatchRegex(value.to_string()))
         } else {
             Ok(Value(value.to_string()))
         }
@@ -78,12 +118,33 @@ pub struct Tracestate(BTreeMap<Key, Value>);
 // TODO(john|p=3|#go): diverged from Go by using newtypes and smart constructors.
 pub type Entry = (Key, Value);
 
-// TODO(john|p=1|#errors): implement error handling traits
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub enum Error {
     MaxKeyValuePairsExceeded,
-    InvalidEntry { entry: Entry },
     DuplicateKey { duplicate: Key },
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self {
+            Error::MaxKeyValuePairsExceeded => write!(
+                f,
+                "max key value pairs of {} would be exceeded by adding the requested entries",
+                MAX_KEY_VALUE_PAIRS
+            ),
+            Error::DuplicateKey { duplicate } => write!(
+                f,
+                "requested entries contain duplicate key '{:?}'",
+                duplicate
+            ),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        None
+    }
 }
 
 impl Tracestate {
@@ -248,14 +309,17 @@ mod test {
         for key in bad_keys {
             assert_eq!(
                 Key::try_new(key),
-                Err(KeyValidationError::DoesNotMatchRegex)
+                Err(KeyValidationError::DoesNotMatchRegex(key.to_string()))
             )
         }
     }
 
     #[test]
     fn empty_key() {
-        assert_eq!(Key::try_new(""), Err(KeyValidationError::DoesNotMatchRegex))
+        assert_eq!(
+            Key::try_new(""),
+            Err(KeyValidationError::DoesNotMatchRegex("".to_string()))
+        )
     }
 
     #[test]
@@ -265,7 +329,7 @@ mod test {
         for value in bad_values {
             assert_eq!(
                 Value::try_new(value),
-                Err(ValueValidationError::DoesNotMatchRegex)
+                Err(ValueValidationError::DoesNotMatchRegex(value.to_string()))
             )
         }
     }
@@ -274,7 +338,7 @@ mod test {
     fn empty_value() {
         assert_eq!(
             Value::try_new(""),
-            Err(ValueValidationError::DoesNotMatchRegex)
+            Err(ValueValidationError::DoesNotMatchRegex("".to_string()))
         )
     }
 
@@ -283,7 +347,7 @@ mod test {
         let too_long: String = std::iter::repeat('a').take(KEY_MAX_SIZE + 1).collect();
         assert_eq!(
             Key::try_new(&too_long),
-            Err(KeyValidationError::ExceedsMaxSize)
+            Err(KeyValidationError::ExceedsMaxSize(too_long.to_string()))
         )
     }
 
@@ -292,14 +356,13 @@ mod test {
         let too_long: String = std::iter::repeat('a').take(VALUE_MAX_SIZE + 1).collect();
         assert_eq!(
             Value::try_new(&too_long),
-            Err(ValueValidationError::ExceedsMaxSize)
+            Err(ValueValidationError::ExceedsMaxSize(too_long.to_string()))
         )
     }
 
     #[test]
     fn create_from_array_with_over_limit_kv_pairs() {
         let keys = (0..=MAX_KEY_VALUE_PAIRS)
-            .into_iter()
             .map(|i| Key::try_new(&format!("a{}b", i)))
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
@@ -321,7 +384,6 @@ mod test {
     #[test]
     fn create_from_parent_with_over_limit_kv_pairs() {
         let keys = (0..MAX_KEY_VALUE_PAIRS)
-            .into_iter()
             .map(|i| Key::try_new(&format!("a{}b", i)))
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
