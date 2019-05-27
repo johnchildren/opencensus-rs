@@ -616,29 +616,25 @@ mod tests {
 
         use std::sync::Mutex;
 
-        use lazy_static::lazy_static;
-
         use crate::export::{register_exporter, unregister_exporter};
 
-        lazy_static! {
-            static ref EXPORTED_SPANS: Mutex<Vec<SpanData>> = Mutex::new(Vec::new());
-            static ref THEN: Instant = Instant::now();
+        struct TestExporter {
+            pub exported_spans: Mutex<Vec<SpanData>>,
         }
-
-        struct TestExporter {}
 
         impl Exporter for TestExporter {
             fn export_span(&self, s: &SpanData) {
-                EXPORTED_SPANS.lock().unwrap().push(s.clone())
+                self.exported_spans.lock().unwrap().push(s.clone())
             }
         }
 
         type StartSpanHelper = Box<dyn Fn(&[StartOption]) -> Span>;
         type EndSpanHelper = Box<dyn Fn(Span) -> SpanData>;
 
-        fn make_helpers() -> (Instant, StartSpanHelper, EndSpanHelper) {
-            EXPORTED_SPANS.lock().unwrap().clear();
-            let then = Instant::now();
+        fn make_helpers(name: &'static str, then: Instant) -> (StartSpanHelper, EndSpanHelper) {
+            let te = Arc::new(TestExporter {
+                exported_spans: Mutex::new(Vec::new()),
+            });
 
             let start_span_helper = |o: &[StartOption]| {
                 let (_, span) = start_span_with_remote_parent(
@@ -659,14 +655,19 @@ mod tests {
                 assert!(span.is_recording_events());
                 assert!(span.span_context.is_sampled());
 
-                let te: Arc<dyn Exporter + Send + Sync> = Arc::new(TestExporter {});
-
-                register_exporter(Arc::clone(&te));
+                let local_te = Arc::clone(&te);
+                let dyn_te: Arc<dyn Exporter + Send + Sync> = local_te;
+                register_exporter(Arc::clone(&dyn_te));
                 span.end();
-                unregister_exporter(&te);
+                unregister_exporter(&dyn_te);
 
-                let mut exported = EXPORTED_SPANS.lock().unwrap();
-                assert_eq!(exported.len(), 1,);
+                let mut exported = te.exported_spans.lock().unwrap();
+                assert_eq!(
+                    exported.len(),
+                    1,
+                    "more than one span exported for test case: {}",
+                    name
+                );
                 let got = &mut exported[0];
 
                 assert!(got.span_context.span_id != SpanID::default(),);
@@ -682,12 +683,12 @@ mod tests {
                 got.clone()
             };
 
-            (then, Box::new(start_span_helper), Box::new(end_span_helper))
+            (Box::new(start_span_helper), Box::new(end_span_helper))
         }
 
         #[test]
         fn span_kind() {
-            let (then, start_span_helper, end_span_helper) = make_helpers();
+            let then = Instant::now();
             struct TestCase {
                 name: &'static str,
                 start_options: Vec<StartOption>,
@@ -770,16 +771,22 @@ mod tests {
             ];
 
             for test in test_cases {
+                let (start_span_helper, end_span_helper) = make_helpers(test.name, then);
                 let span = start_span_helper(&test.start_options);
                 let got = end_span_helper(span);
                 assert_eq!(got, test.want);
-                EXPORTED_SPANS.lock().unwrap().clear();
             }
         }
 
         #[test]
         fn set_span_attributes() {
-            let (then, start_span_helper, end_span_helper) = make_helpers();
+            let then = Instant::now();
+            let (start_span_helper, end_span_helper) = make_helpers("span attributes", then);
+            make_helpers("span attributes", then);
+            make_helpers("span attributes", then);
+            make_helpers("span attributes", then);
+            make_helpers("span attributes", then);
+                make_helpers("span attributes", then);
 
             let mut attributes = HashMap::new();
             attributes.insert(
