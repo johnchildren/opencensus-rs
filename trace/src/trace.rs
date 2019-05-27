@@ -326,11 +326,23 @@ pub fn with_sampler(sampler: Sampler) -> StartOption {
 mod tests {
     use super::*;
 
-    use crate::export::Exporter;
+    use std::sync::Mutex;
+
+    use crate::export::{register_exporter, unregister_exporter, Exporter};
     use crate::tracestate::{Key, Value};
 
     const TID: TraceID = TraceID([1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 4, 8, 16, 32, 64, 128]);
     const SID: SpanID = SpanID([1, 2, 4, 8, 16, 32, 64, 128]);
+
+    struct TestExporter {
+        pub exported_spans: Mutex<Vec<SpanData>>,
+    }
+
+    impl Exporter for TestExporter {
+        fn export_span(&self, s: &SpanData) {
+            self.exported_spans.lock().unwrap().push(s.clone())
+        }
+    }
 
     #[test]
     fn id_string_represenation() {
@@ -618,16 +630,6 @@ mod tests {
 
         use crate::export::{register_exporter, unregister_exporter};
 
-        struct TestExporter {
-            pub exported_spans: Mutex<Vec<SpanData>>,
-        }
-
-        impl Exporter for TestExporter {
-            fn export_span(&self, s: &SpanData) {
-                self.exported_spans.lock().unwrap().push(s.clone())
-            }
-        }
-
         type StartSpanHelper = Box<dyn Fn(&[StartOption]) -> Span>;
         type EndSpanHelper = Box<dyn Fn(Span) -> SpanData>;
 
@@ -782,11 +784,6 @@ mod tests {
         fn set_span_attributes() {
             let then = Instant::now();
             let (start_span_helper, end_span_helper) = make_helpers("span attributes", then);
-            make_helpers("span attributes", then);
-            make_helpers("span attributes", then);
-            make_helpers("span attributes", then);
-            make_helpers("span attributes", then);
-                make_helpers("span attributes", then);
 
             let mut attributes = HashMap::new();
             attributes.insert(
@@ -821,5 +818,31 @@ mod tests {
         }
 
         //TODO: max attributes per span
+    }
+
+    #[test]
+    fn unregister_exporter_ends_exporting() {
+        let te = Arc::new(TestExporter {
+            exported_spans: Mutex::new(Vec::new()),
+        });
+        let local_te = Arc::clone(&te);
+        let dyn_te: Arc<dyn Exporter + Send + Sync> = local_te;
+        register_exporter(Arc::clone(&dyn_te));
+        unregister_exporter(&dyn_te);
+
+        let (_, span) = start_span_with_remote_parent(
+            &Context::background().freeze(),
+            "span0",
+            &SpanContext {
+                trace_id: TID,
+                span_id: SID,
+                trace_options: TraceOptions(1),
+                trace_state: None,
+            },
+            &[],
+        );
+        span.end();
+        let exported = te.exported_spans.lock().unwrap();
+        assert_eq!(exported.len(), 0,);
     }
 }
